@@ -1,1 +1,1 @@
-# Aktien-Watchlist-
+# Aktien-Watchlist
