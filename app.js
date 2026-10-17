@@ -5,14 +5,13 @@ const catalog = [
 const key = 'aktien-watchlist-v1';
 let items = catalog.slice(0,5).map(([label,symbol])=>({label,symbol}));
 let storageOK = true;
-try { const saved=JSON.parse(localStorage.getItem(key)); if(Array.isArray(saved)) items=saved.filter(x=>x && typeof x.symbol==='string' && /^[A-Z0-9_]+:[A-Z0-9._-]+$/.test(x.symbol) && typeof x.label==='string').slice(0,30); } catch { storageOK=false; }
+try { const saved=JSON.parse(localStorage.getItem(key)); if(Array.isArray(saved)) items=saved.filter(x=>x && typeof x.symbol==='string' && /^[A-Z0-9_]+:[A-Z0-9._\/-]+$/.test(x.symbol) && typeof x.label==='string').slice(0,30); } catch { storageOK=false; }
 const $ = id=>document.getElementById(id);
 $('today').textContent=new Intl.DateTimeFormat('de-DE',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date());
-for(const [label,symbol] of catalog){const option=document.createElement('option');option.value=label;option.label=symbol;$('stocks').append(option);}
 function save(){try{localStorage.setItem(key,JSON.stringify(items));}catch{storageOK=false;} if(!storageOK)$('message').textContent='Speichern im Browser ist nicht verfügbar. Deine Auswahl gilt für diese Sitzung.';}
 function render(){
  $('count').textContent=items.length;$('selection-count').textContent=`${items.length} / 30`;$('selection').replaceChildren();
- for(const item of items){const li=document.createElement('li');const text=document.createElement('div');const strong=document.createElement('strong');strong.textContent=item.label;const small=document.createElement('small');small.textContent=item.symbol;text.append(strong,small);const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label',`${item.label} entfernen`);remove.onclick=()=>{items=items.filter(x=>x.symbol!==item.symbol);save();render();};li.append(text,remove);$('selection').append(li);}
+ for(const item of items){const li=document.createElement('li');const text=document.createElement('div');const strong=document.createElement('strong');strong.textContent=item.label;const small=document.createElement('small');small.textContent=item.symbol;text.append(strong,small);const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label',`${item.label} entfernen`);remove.onclick=()=>{items=items.filter(x=>x.symbol!==item.symbol);save();render();showResults(lastResults);};li.append(text,remove);$('selection').append(li);}
  $('market').replaceChildren();
  renderFeed();
 }
@@ -60,7 +59,50 @@ async function renderFeed(){
   if(activeRequest===controller) refreshTimer=setTimeout(renderFeed,60000);
  }
 }
-$('add-form').addEventListener('submit',event=>{event.preventDefault();const value=$('symbol').value.trim();const known=catalog.find(([label,symbol])=>label.toLowerCase()===value.toLowerCase()||symbol===value.toUpperCase()||symbol.split(':')[1]===value.toUpperCase());const symbol=known?known[1]:value.toUpperCase();if(!/^[A-Z0-9_]+:[A-Z0-9._-]+$/.test(symbol)){$('message').textContent='Bitte eine Aktie aus der Liste oder ein Kürzel im Format BÖRSE:SYMBOL wählen.';return;}if(items.some(x=>x.symbol===symbol)){$('message').textContent='Diese Aktie ist schon in deiner Watchlist.';return;}if(items.length>=30){$('message').textContent='Deine Watchlist kann bis zu 30 Aktien enthalten.';return;}items.push({label:known?known[0]:symbol.split(':')[1],symbol});$('symbol').value='';$('message').textContent=known?'Aktie hinzugefügt.':'Symbol hinzugefügt. Falls TradingView keine Daten findet, prüfe Börse und Kürzel.';save();render();});
+let searchTimer;
+let searchRequest;
+let searchVersion = 0;
+const preferredExchanges=['XETR','NASDAQ','NYSE','EURONEXT','LSE','SIX'];
+function addStock(stock){
+ if(items.some(x=>x.symbol===stock.symbol)){$('message').textContent='Diese Aktie ist schon in deiner Watchlist.';return;}
+ if(items.length>=30){$('message').textContent='Deine Watchlist kann bis zu 30 Aktien enthalten.';return;}
+ items.push({label:stock.label,symbol:stock.symbol});save();render();
+ $('message').textContent=`${stock.label} wurde hinzugefügt.`;
+ showResults(lastResults);
+}
+let lastResults=[];
+function showResults(results){
+ lastResults=results;$('search-results').replaceChildren();
+ for(const stock of results){
+  const li=document.createElement('li');const button=document.createElement('button');button.type='button';button.className='search-result';
+  const name=document.createElement('strong');name.textContent=stock.label;
+  const detail=document.createElement('small');detail.textContent=`${stock.symbol.split(':')[0]} · ${stock.currency || 'Handelswährung siehe Kurs'} · ${stock.symbol.split(':')[1]}`;
+  const action=document.createElement('span');const added=items.some(x=>x.symbol===stock.symbol);action.textContent=added?'✓ In Watchlist':'＋ Hinzufügen';
+  button.disabled=added;button.setAttribute('aria-label',`${stock.label}, ${detail.textContent}, ${action.textContent}`);
+  const text=document.createElement('div');text.append(name,detail);button.append(text,action);button.onclick=()=>addStock(stock);li.append(button);$('search-results').append(li);
+ }
+}
+async function searchStocks(query,version){
+ const controller=new AbortController();searchRequest=controller;const timeout=setTimeout(()=>controller.abort(),12000);
+ try{
+  const response=await fetch('https://scanner.tradingview.com/global/scan',{method:'POST',headers:{'Content-Type':'text/plain'},signal:controller.signal,body:JSON.stringify({filter:[{left:'type',operation:'equal',right:'stock'},{left:'description',operation:'match',right:query}],columns:['name','description','exchange','currency'],range:[0,200]})});
+  if(!response.ok)throw new Error('Suche fehlgeschlagen');const payload=await response.json();if(!Array.isArray(payload.data))throw new Error('Ungültige Antwort');
+  if(version!==searchVersion)return;
+  const rank=s=>{const index=preferredExchanges.indexOf(s.symbol.split(':')[0]);return index<0?99:index;};
+  const results=payload.data.filter(row=>row && typeof row.s==='string' && Array.isArray(row.d)).map(row=>({symbol:row.s,label:row.d[1]||row.d[0],currency:row.d[3]})).sort((a,b)=>rank(a)-rank(b)||a.label.localeCompare(b.label,'de')).slice(0,20);
+  showResults(results);$('search-status').textContent=results.length?`${results.length} Treffer${payload.totalCount>20?' (Auswahl)':''} · Zum Hinzufügen anklicken.`:'Keine Aktie gefunden. Versuche einen kürzeren Namen oder die internationale Schreibweise.';
+ }catch{
+  if(version!==searchVersion)return;
+  $('search-status').textContent=lastResults.length?'Online-Suche gerade nicht verfügbar. Bekannte Aktien werden unten angezeigt.':'Suche gerade nicht verfügbar. Bitte prüfe deine Verbindung und versuche es erneut.';
+ }finally{clearTimeout(timeout);}
+}
+$('symbol').addEventListener('input',()=>{
+ clearTimeout(searchTimer);if(searchRequest)searchRequest.abort();const version=++searchVersion;const query=$('symbol').value.trim();$('message').textContent='';
+ if(query.length<2){showResults([]);$('search-status').textContent=query?'Bitte mindestens zwei Buchstaben eingeben.':'';return;}
+ const local=catalog.filter(([name])=>name.toLocaleLowerCase('de').includes(query.toLocaleLowerCase('de'))).map(([label,symbol])=>({label,symbol,currency:symbol.startsWith('XETR:')?'EUR':undefined}));
+ showResults(local);$('search-status').textContent='Aktien werden gesucht …';searchTimer=setTimeout(()=>searchStocks(query,version),400);
+});
+$('add-form').addEventListener('submit',event=>{event.preventDefault();clearTimeout(searchTimer);const query=$('symbol').value.trim();if(query.length<2){$('search-status').textContent='Bitte mindestens zwei Buchstaben eingeben.';return;}if(searchRequest)searchRequest.abort();searchStocks(query,++searchVersion);});
 $('refresh').addEventListener('click',renderFeed);
 window.addEventListener('online',renderFeed);
 window.addEventListener('offline',()=>{$('feed-status').textContent='Du bist offline. Kursupdates werden fortgesetzt, sobald die Verbindung wieder verfügbar ist.';});
