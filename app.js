@@ -2,16 +2,30 @@
 const catalog = [
  ['Apple','NASDAQ:AAPL'],['Microsoft','NASDAQ:MSFT'],['NVIDIA','NASDAQ:NVDA'],['Alphabet','NASDAQ:GOOGL'],['Amazon','NASDAQ:AMZN'],['Meta','NASDAQ:META'],['Tesla','NASDAQ:TSLA'],['Berkshire Hathaway','NYSE:BRK.B'],['Visa','NYSE:V'],['SAP','XETR:SAP'],['Siemens','XETR:SIE'],['Allianz','XETR:ALV'],['Rheinmetall','XETR:RHM'],['Deutsche Telekom','XETR:DTE'],['BMW','XETR:BMW'],['Mercedes-Benz','XETR:MBG'],['Volkswagen','XETR:VOW3'],['BASF','XETR:BAS'],['Adidas','XETR:ADS'],['ASML','EURONEXT:ASML'],['Novo Nordisk','OMXCOP:NOVO_B']
 ];
-const key = 'aktien-watchlist-v1';
-let items = catalog.slice(0,5).map(([label,symbol])=>({label,symbol}));
-let storageOK = true;
-try { const saved=JSON.parse(localStorage.getItem(key)); if(Array.isArray(saved)) items=saved.filter(x=>x && typeof x.symbol==='string' && /^[A-Z0-9_]+:[A-Z0-9._\/-]+$/.test(x.symbol) && typeof x.label==='string').slice(0,30); } catch { storageOK=false; }
+// Access to localStorage itself may throw in restricted browser contexts.
+const browserStorage = {
+ getItem: key => window.localStorage.getItem(key),
+ setItem: (key, value) => window.localStorage.setItem(key, value)
+};
+const restored = WatchlistStorage.read(browserStorage, location.hash, catalog.slice(0,5).map(([label,symbol])=>({label,symbol})));
+let items = restored.items;
 const $ = id=>document.getElementById(id);
 $('today').textContent=new Intl.DateTimeFormat('de-DE',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date());
-function save(){try{localStorage.setItem(key,JSON.stringify(items));}catch{storageOK=false;} if(!storageOK)$('message').textContent='Speichern im Browser ist nicht verfügbar. Deine Auswahl gilt für diese Sitzung.';}
+$('restore-status').textContent = restored.warning || (restored.source === 'example' ? 'Keine gespeicherte Watchlist gefunden. Du siehst eine Beispielauswahl. Sichere deine eigene Auswahl über „Watchlist-Link kopieren“ als Lesezeichen.' : '');
+function save(){
+ const stored = WatchlistStorage.write(browserStorage, items);
+ let linked = false;
+ const url = new URL(location.href); url.hash = WatchlistStorage.hash(items);
+ try { history.replaceState(null, '', url); linked = true; } catch { /* Link remains available for copying. */ }
+ $('watchlist-link').href = url.href;
+ $('storage-status').textContent = stored
+  ? '✓ Auswahl in diesem Browser gespeichert. Für andere Browser oder gelöschte Websitedaten: persönlichen Link als Lesezeichen sichern.'
+  : 'Speichern im Browser ist blockiert. Sichere den persönlichen Watchlist-Link als Lesezeichen, damit deine Auswahl erhalten bleibt.';
+ if (!linked && !stored) $('storage-status').textContent += ' Nutze dafür „Watchlist-Link kopieren“.';
+}
 function render(){
  $('count').textContent=items.length;$('selection-count').textContent=`${items.length} / 30`;$('selection').replaceChildren();
- for(const item of items){const li=document.createElement('li');const text=document.createElement('div');const strong=document.createElement('strong');strong.textContent=item.label;const small=document.createElement('small');small.textContent=item.symbol;text.append(strong,small);const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label',`${item.label} entfernen`);remove.onclick=()=>{items=items.filter(x=>x.symbol!==item.symbol);save();render();showResults(lastResults);};li.append(text,remove);$('selection').append(li);}
+ for(const item of items){const li=document.createElement('li');const text=document.createElement('div');const strong=document.createElement('strong');strong.textContent=item.label;const small=document.createElement('small');small.textContent=item.symbol;text.append(strong,small);const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label',`${item.label} entfernen`);remove.onclick=()=>{items=items.filter(x=>x.symbol!==item.symbol);$('restore-status').textContent='';save();render();showResults(lastResults);};li.append(text,remove);$('selection').append(li);}
  $('market').replaceChildren();
  renderFeed();
 }
@@ -66,7 +80,7 @@ const preferredExchanges=['XETR','NASDAQ','NYSE','EURONEXT','LSE','SIX'];
 function addStock(stock){
  if(items.some(x=>x.symbol===stock.symbol)){$('message').textContent='Diese Aktie ist schon in deiner Watchlist.';return;}
  if(items.length>=30){$('message').textContent='Deine Watchlist kann bis zu 30 Aktien enthalten.';return;}
- items.push({label:stock.label,symbol:stock.symbol});save();render();
+ items.push({label:stock.label,symbol:stock.symbol});$('restore-status').textContent='';save();render();
  $('message').textContent=`${stock.label} wurde hinzugefügt.`;
  showResults(lastResults);
 }
@@ -103,7 +117,20 @@ $('symbol').addEventListener('input',()=>{
  showResults(local);$('search-status').textContent='Aktien werden gesucht …';searchTimer=setTimeout(()=>searchStocks(query,version),400);
 });
 $('add-form').addEventListener('submit',event=>{event.preventDefault();clearTimeout(searchTimer);const query=$('symbol').value.trim();if(query.length<2){$('search-status').textContent='Bitte mindestens zwei Buchstaben eingeben.';return;}if(searchRequest)searchRequest.abort();searchStocks(query,++searchVersion);});
+$('copy-watchlist').addEventListener('click', async()=>{
+ try { await navigator.clipboard.writeText($('watchlist-link').href); $('link-status').textContent='Link kopiert. Speichere ihn als Lesezeichen. Nach späteren Änderungen kannst du den Link erneut kopieren.'; }
+ catch { $('link-status').textContent='Kopieren nicht möglich. Halte „Persönlichen Link öffnen“ gedrückt oder klicke mit rechts, um den Link zu kopieren oder als Lesezeichen zu speichern.'; }
+});
+window.addEventListener('hashchange',()=>{
+ const state=WatchlistStorage.read(browserStorage,location.hash,items);
+ if(state.source==='link'){items=state.items;$('restore-status').textContent='Watchlist aus deinem persönlichen Link geladen.';save();render();showResults(lastResults);}
+});
+window.addEventListener('storage',event=>{
+ if(event.key!==WatchlistStorage.KEY || event.newValue===null)return;
+ try{items=WatchlistStorage.validate(JSON.parse(event.newValue));save();render();showResults(lastResults);$('restore-status').textContent='Watchlist aus einem anderen geöffneten Tab übernommen.';}catch{/* Keep current selection if another tab wrote invalid data. */}
+});
 $('refresh').addEventListener('click',renderFeed);
 window.addEventListener('online',renderFeed);
 window.addEventListener('offline',()=>{$('feed-status').textContent='Du bist offline. Kursupdates werden fortgesetzt, sobald die Verbindung wieder verfügbar ist.';});
+save();
 render();
