@@ -48,7 +48,7 @@ async function renderFeed(){
  $('feed-status').textContent='Kursdaten werden aktualisiert …';
  const timeout=setTimeout(()=>controller.abort(),15000);
  try {
-  const response=await fetch('https://scanner.tradingview.com/global/scan', {method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({symbols:{tickers:items.map(x=>x.symbol)},columns:['name','close','currency','change','Perf.W','Perf.1M']}),signal:controller.signal});
+  const response=await fetch('https://scanner.tradingview.com/global/scan', {method:'POST',headers:{'Content-Type':'text/plain'},body:JSON.stringify({symbols:{tickers:items.map(x=>x.symbol)},columns:['name','close','currency','change','Perf.W','Perf.1M','price_52_week_high','price_52_week_low']}),signal:controller.signal});
   if(!response.ok) throw new Error(`HTTP ${response.status}`);
   const payload=await response.json();
   if(!Array.isArray(payload.data)) throw new Error('Ungültige Antwort');
@@ -57,11 +57,11 @@ async function renderFeed(){
   const table=document.createElement('table');table.className='quote-table';
   const caption=document.createElement('caption');caption.className='sr-only';caption.textContent='Aktienkurse und Kursänderungen in Prozent';table.append(caption);
   const head=document.createElement('thead');const header=document.createElement('tr');
-  for(const title of ['Aktie','Kurs','Währung','Tag','Woche','Monat']){const th=document.createElement('th');th.scope='col';th.textContent=title;header.append(th);}head.append(header);table.append(head);
+  for(const title of ['Aktie','Kurs','Währung','Tag','Woche','Monat','52-Wochen-Hoch','52-Wochen-Tief']){const th=document.createElement('th');th.scope='col';th.textContent=title;header.append(th);}head.append(header);table.append(head);
   const body=document.createElement('tbody');let missing=0;
   for(const item of items){
    const data=quotes.get(item.symbol);if(!data)missing++;
-   const row=document.createElement('tr');const name=document.createElement('th');name.scope='row';const link=document.createElement('a');link.textContent=item.label;link.href=`https://www.tradingview.com/symbols/${encodeURIComponent(item.symbol.replace(':','-'))}/`;link.target='_blank';link.rel='noopener';const symbol=document.createElement('small');symbol.textContent=item.symbol;name.append(link,symbol);row.append(name,valueCell(data?.[1]));const currency=document.createElement('td');currency.textContent=data?.[2]||'–';row.append(currency,valueCell(data?.[3],true),valueCell(data?.[4],true),valueCell(data?.[5],true));body.append(row);
+   const row=document.createElement('tr');const name=document.createElement('th');name.scope='row';const link=document.createElement('a');link.textContent=item.label;link.href=`https://www.tradingview.com/symbols/${encodeURIComponent(item.symbol.replace(':','-'))}/`;link.target='_blank';link.rel='noopener';const symbol=document.createElement('small');symbol.textContent=item.symbol;name.append(link,symbol);row.append(name,valueCell(data?.[1]));const currency=document.createElement('td');currency.textContent=data?.[2]||'–';row.append(currency,valueCell(data?.[3],true),valueCell(data?.[4],true),valueCell(data?.[5],true),valueCell(data?.[6]),valueCell(data?.[7]));body.append(row);
   }
   table.append(body);scroll.append(table);mount.replaceChildren(scroll);
   $('feed-status').textContent=`Abgerufen um ${new Intl.DateTimeFormat('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date())} · Aktualisierung alle 60 Sekunden.${missing?' Für '+missing+' Symbol(e) sind keine Daten verfügbar.':''}`;
